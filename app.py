@@ -1120,13 +1120,11 @@ def test_feedback():
 if __name__ == '__main__':
     print("\n" + "=" * 50)
     print("🚀 MCC AI Agent запущен!")
-    print("📍 Адрес: http://localhost:5000")
-    print("🤖 Telegram бот: @MCCFeedbackBot")
-    print("📝 Сообщения сохраняются в feedback.txt")
-    print("📢 Файл для рассылки: telegram_messages.txt")
+    print(f"📍 Адрес: http://{FLASK_HOST}:{FLASK_PORT}")
     print("=" * 50 + "\n")
 
     # Отключаем предупреждения о SSL
     requests.packages.urllib3.disable_warnings()
 
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    if os.getenv('FLASK_ENV') == 'development':
+        app.run(debug=True, host=FLASK_HOST, port=FLASK_PORT)
