@@ -1128,3 +1128,8 @@ if __name__ == '__main__':
 
     if os.getenv('FLASK_ENV') == 'development':
         app.run(debug=True, host=FLASK_HOST, port=FLASK_PORT)
+
+# Для продакшена на Render
+if __name__ != '__main__':
+    # Это нужно, чтобы gunicorn мог найти приложение
+    application = app
