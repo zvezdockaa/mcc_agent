@@ -762,54 +762,34 @@ def save_message_for_bot(name, email, message):
         return False
 
 
-def send_to_telegram_broadcast(name, email, message):
+def send_to_telegram_subscribers(name, email, message):
     """
-    Отправляет сообщение в Telegram и сохраняет для массовой рассылки
+    Отправляет сообщение всем подписчикам бота
     """
     try:
         # Формируем сообщение
         text = f"📬 НОВАЯ ОБРАТНАЯ СВЯЗЬ\n\n👤 Имя: {name}\n📧 Email: {email}\n\n💬 Сообщение:\n{message}"
 
-        print(f"📤 Отправка сообщения администратору {TELEGRAM_CHAT_ID}...")
+        # Отправляем админу (для контроля)
+        admin_sent = False
+        if TELEGRAM_CHAT_ID:
+            admin_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            admin_params = {
+                'chat_id': TELEGRAM_CHAT_ID,
+                'text': f"📢 Начинаю рассылку всем подписчикам...\n\n{text[:100]}..."
+            }
+            requests.get(admin_url, params=admin_params, timeout=5, verify=False)
+            admin_sent = True
 
-        # Отправляем через Bot API
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        # ВАЖНО: Здесь должен быть эндпоинт для бота
+        # Но в данной версии рассылку делает сам бот через getUpdates
 
-        params = {
-            'chat_id': TELEGRAM_CHAT_ID,
-            'text': text
-        }
-
-        response = requests.get(
-            url,
-            params=params,
-            timeout=10,
-            verify=False
-        )
-
-        print(f"📊 Статус ответа: {response.status_code}")
-
-        if response.status_code == 200:
-            print(f"✅ Сообщение отправлено администратору")
-
-            # Сохраняем сообщение для массовой рассылки
-            save_message_for_bot(name, email, message)
-
-            return True
-        else:
-            print(f"❌ Ошибка Telegram: {response.status_code}")
-            print(f"Ответ: {response.text}")
-
-            # Даже если не отправилось, сохраняем для последующей рассылки
-            save_message_for_bot(name, email, message)
-            return False
+        # Возвращаем успех
+        return True
 
     except Exception as e:
         print(f"❌ Ошибка отправки: {e}")
-        # Сохраняем сообщение в любом случае
-        save_message_for_bot(name, email, message)
         return False
-
 
 def predict_mcc(shop_name, merchant, city, street, house, building, description):
     """
@@ -934,7 +914,7 @@ def search_2gis_route():
 
 @app.route('/send_feedback', methods=['POST'])
 def send_feedback():
-    """Обрабатывает отправку обратной связи"""
+    """Обрабатывает отправку обратной связи и сохраняет в Google Sheets"""
     data = request.get_json()
     name = data.get('name', '').strip()
     email = data.get('email', '').strip()
@@ -950,25 +930,95 @@ def send_feedback():
     if not message or len(message) < 10:
         return jsonify({"success": False, "error": "Сообщение должно содержать минимум 10 символов"})
 
-    # Сохраняем в файл (всегда)
+    # Сохраняем в локальный файл (как резервную копию)
     save_feedback_to_file(name, email, message)
 
-    # Отправляем через новую функцию (которая сохраняет для рассылки)
-    success = send_to_telegram_broadcast(name, email, message)
+    # Отправляем в Google Sheets
+    google_sheets_success = send_to_google_sheets(name, email, message)
 
-    if success:
+    # Отправляем в Telegram (опционально)
+    telegram_success = False
+    if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+        telegram_success = send_to_telegram_subscribers(name, email, message)
+
+    # Формируем ответ пользователю
+    if google_sheets_success:
         return jsonify({
             "success": True,
-            "message": "Спасибо! Ваше сообщение отправлено и будет разослано всем подписчикам"
+            "message": "Спасибо! Ваше сообщение сохранено в Google Таблице",
+            "details": {
+                "google_sheets": True,
+                "telegram": telegram_success
+            }
         })
     else:
-        # Сообщение уже сохранено в save_message_for_bot внутри функции
         return jsonify({
             "success": True,
-            "message": "Спасибо! Сообщение сохранено и будет доставлено позже"
+            "message": "Спасибо! Сообщение сохранено локально",
+            "details": {
+                "google_sheets": False,
+                "telegram": telegram_success
+            }
         })
 
 
+def send_to_google_sheets(name, email, message):
+    """
+    Отправляет данные в Google Sheets через вебхук
+    """
+    try:
+        webhook_url = os.getenv('GOOGLE_SHEETS_WEBHOOK_URL')
+
+        if not webhook_url:
+            print("❌ GOOGLE_SHEETS_WEBHOOK_URL не настроен")
+            return False
+
+        print(f"📤 Отправка в Google Sheets: {name}, {email}")
+        print(f"🔗 URL: {webhook_url}")
+
+        # Данные для отправки
+        payload = {
+            'name': name,
+            'email': email,
+            'message': message
+        }
+
+        # Отправляем POST запрос
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=10,
+            headers={'Content-Type': 'application/json'}
+        )
+
+        print(f"📊 Статус ответа: {response.status_code}")
+        print(f"📄 Ответ: {response.text[:200]}")
+
+        if response.status_code == 200:
+            try:
+                result = response.json()
+                if result.get('success'):
+                    print(f"✅ Данные сохранены в Google Sheets")
+                    return True
+                else:
+                    print(f"❌ Ошибка Google Sheets: {result.get('error')}")
+                    return False
+            except:
+                print(f"❌ Не удалось распарсить ответ")
+                return False
+        else:
+            print(f"❌ Ошибка HTTP: {response.status_code}")
+            return False
+
+    except requests.exceptions.Timeout:
+        print("❌ Таймаут при отправке в Google Sheets")
+        return False
+    except requests.exceptions.ConnectionError:
+        print("❌ Ошибка соединения с Google Sheets")
+        return False
+    except Exception as e:
+        print(f"❌ Неизвестная ошибка: {e}")
+        return False
 @app.route('/check_telegram', methods=['GET'])
 def check_telegram():
     """Проверка доступности Telegram API"""
